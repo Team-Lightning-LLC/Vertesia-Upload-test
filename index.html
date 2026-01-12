@@ -91,8 +91,8 @@
 
     <script>
         const API_KEY = 'sk-cf3c2d29bc38bfee2ae95bf107cb9046';
-        const STS_HOST = 'https://sts.vertesia.io';
-        const API_HOST = 'https://api.vertesia.io';
+        const API_BASE = 'https://api.vertesia.io/api/v1';
+        const AUTH_BASE = 'https://api.vertesia.io';
 
         function log(msg, type = 'step') {
             const logEl = document.getElementById('log');
@@ -110,7 +110,8 @@
         async function getJWT() {
             log('→ Getting JWT token...');
             
-            const response = await fetch(`${STS_HOST}/auth/token`, {
+            // Match the working code: use api.vertesia.io and pass token as query param
+            const response = await fetch(`${AUTH_BASE}/auth/token?token=${API_KEY}`, {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${API_KEY}`
@@ -118,7 +119,8 @@
             });
 
             if (!response.ok) {
-                throw new Error(`JWT request failed: ${response.status}`);
+                const errText = await response.text();
+                throw new Error(`JWT request failed: ${response.status} - ${errText}`);
             }
 
             const data = await response.json();
@@ -126,13 +128,14 @@
             return data.token;
         }
 
-        async function getUploadURL(jwt, fileName, mimeType) {
+        async function getUploadURL(fileName, mimeType) {
             log(`→ Getting upload URL for "${fileName}"...`);
             
-            const response = await fetch(`${API_HOST}/api/v1/objects/upload-url`, {
+            // Can use API key directly for this endpoint
+            const response = await fetch(`${API_BASE}/objects/upload-url`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${jwt}`,
+                    'Authorization': `Bearer ${API_KEY}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -163,10 +166,34 @@
             });
 
             if (!response.ok) {
-                throw new Error(`GCS upload failed: ${response.status}`);
+                const errText = await response.text();
+                throw new Error(`GCS upload failed: ${response.status} - ${errText}`);
             }
 
             log('✓ File uploaded successfully!', 'ok');
+        }
+
+        async function verifyObject(objectId) {
+            log('→ Verifying object exists...');
+            
+            const response = await fetch(`${API_BASE}/objects/${objectId}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${API_KEY}`
+                }
+            });
+
+            if (response.ok) {
+                const obj = await response.json();
+                log(`✓ Object verified: ${obj.name}`, 'ok');
+                if (obj.content?.source) {
+                    log(`  Source: ${obj.content.source}`, 'ok');
+                }
+                return obj;
+            } else {
+                log('⚠ Object not immediately visible (may need processing time)', 'step');
+                return null;
+            }
         }
 
         async function uploadDocument() {
@@ -185,29 +212,51 @@
             }
 
             const file = fileInput.files[0];
-            const mimeType = file.type || 'application/octet-stream';
+            const mimeType = file.type || getMimeType(file.name);
+            
+            log(`File: ${file.name} (${(file.size/1024).toFixed(1)} KB)`, 'step');
+            log(`Type: ${mimeType}`, 'step');
             
             btn.disabled = true;
             setStatus('Uploading...', 'info');
 
             try {
-                // Step 1: Get JWT
-                const jwt = await getJWT();
+                // Step 1: Get upload URL (creates object in Vertesia)
+                const uploadData = await getUploadURL(file.name, mimeType);
 
-                // Step 2: Get upload URL
-                const uploadData = await getUploadURL(jwt, file.name, mimeType);
-
-                // Step 3: Upload to GCS
+                // Step 2: Upload to GCS
                 await uploadToGCS(uploadData.url, file, mimeType);
+
+                // Step 3: Verify object exists
+                await verifyObject(uploadData.id);
 
                 setStatus(`Success! Object ID: ${uploadData.id}`, 'success');
                 
             } catch (err) {
                 log(`✗ ${err.message}`, 'err');
                 setStatus(`Error: ${err.message}`, 'error');
+                console.error('Upload error:', err);
             } finally {
                 btn.disabled = false;
             }
+        }
+
+        function getMimeType(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const types = {
+                pdf: 'application/pdf',
+                docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                doc: 'application/msword',
+                txt: 'text/plain',
+                md: 'text/markdown',
+                png: 'image/png',
+                jpg: 'image/jpeg',
+                jpeg: 'image/jpeg',
+                xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                xls: 'application/vnd.ms-excel',
+                csv: 'text/csv'
+            };
+            return types[ext] || 'application/octet-stream';
         }
     </script>
 </body>

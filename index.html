@@ -173,27 +173,33 @@
             log('✓ File uploaded successfully!', 'ok');
         }
 
-        async function verifyObject(objectId) {
-            log('→ Verifying object exists...');
+        async function createObject(gcsPath, fileName, mimeType) {
+            log('→ Creating object in Vertesia...');
             
-            const response = await fetch(`${API_BASE}/objects/${objectId}`, {
-                method: 'GET',
+            const response = await fetch(`${API_BASE}/objects`, {
+                method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${API_KEY}`
-                }
+                    'Authorization': `Bearer ${API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: fileName,
+                    content: {
+                        source: gcsPath,
+                        type: mimeType,
+                        name: fileName
+                    }
+                })
             });
 
-            if (response.ok) {
-                const obj = await response.json();
-                log(`✓ Object verified: ${obj.name}`, 'ok');
-                if (obj.content?.source) {
-                    log(`  Source: ${obj.content.source}`, 'ok');
-                }
-                return obj;
-            } else {
-                log('⚠ Object not immediately visible (may need processing time)', 'step');
-                return null;
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Create object failed: ${response.status} - ${errText}`);
             }
+
+            const obj = await response.json();
+            log(`✓ Object created! ID: ${obj.id}`, 'ok');
+            return obj;
         }
 
         async function uploadDocument() {
@@ -221,16 +227,16 @@
             setStatus('Uploading...', 'info');
 
             try {
-                // Step 1: Get upload URL (creates object in Vertesia)
+                // Step 1: Get upload URL (reserves GCS storage)
                 const uploadData = await getUploadURL(file.name, mimeType);
 
                 // Step 2: Upload to GCS
                 await uploadToGCS(uploadData.url, file, mimeType);
 
-                // Step 3: Verify object exists
-                await verifyObject(uploadData.id);
+                // Step 3: Create the object in Vertesia (THIS WAS MISSING!)
+                const obj = await createObject(uploadData.id, file.name, mimeType);
 
-                setStatus(`Success! Object ID: ${uploadData.id}`, 'success');
+                setStatus(`Success! Object ID: ${obj.id}`, 'success');
                 
             } catch (err) {
                 log(`✗ ${err.message}`, 'err');

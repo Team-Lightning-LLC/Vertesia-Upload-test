@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vertesia Document Upload</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 500px;
+            margin: 60px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin: 0 0 20px;
+            font-size: 1.5rem;
+            color: #333;
+        }
+        .file-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px dashed #ddd;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+        .file-input:hover { border-color: #007bff; }
+        button {
+            width: 100%;
+            padding: 12px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            display: none;
+        }
+        .status.info { background: #e7f3ff; color: #0056b3; display: block; }
+        .status.success { background: #d4edda; color: #155724; display: block; }
+        .status.error { background: #f8d7da; color: #721c24; display: block; }
+        .log {
+            margin-top: 20px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+        .log.show { display: block; }
+        .log div { margin-bottom: 4px; }
+        .log .step { color: #666; }
+        .log .ok { color: #28a745; }
+        .log .err { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>📄 Vertesia Upload</h1>
+        
+        <input type="file" id="fileInput" class="file-input">
+        
+        <button id="uploadBtn" onclick="uploadDocument()">Upload Document</button>
+        
+        <div id="status" class="status"></div>
+        
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        const API_KEY = 'sk-cf3c2d29bc38bfee2ae95bf107cb9046';
+        const STS_HOST = 'https://sts.vertesia.io';
+        const API_HOST = 'https://api.vertesia.io';
+
+        function log(msg, type = 'step') {
+            const logEl = document.getElementById('log');
+            logEl.classList.add('show');
+            logEl.innerHTML += `<div class="${type}">${msg}</div>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function setStatus(msg, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${type}`;
+            statusEl.textContent = msg;
+        }
+
+        async function getJWT() {
+            log('→ Getting JWT token...');
+            
+            const response = await fetch(`${STS_HOST}/auth/token`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${API_KEY}`
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error(`JWT request failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            log('✓ JWT obtained', 'ok');
+            return data.token;
+        }
+
+        async function getUploadURL(jwt, fileName, mimeType) {
+            log(`→ Getting upload URL for "${fileName}"...`);
+            
+            const response = await fetch(`${API_HOST}/api/v1/objects/upload-url`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${jwt}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: fileName,
+                    mime_type: mimeType
+                })
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Upload URL request failed: ${response.status} - ${errText}`);
+            }
+
+            const data = await response.json();
+            log(`✓ Upload URL received (ID: ${data.id})`, 'ok');
+            return data;
+        }
+
+        async function uploadToGCS(url, file, mimeType) {
+            log('→ Uploading file to storage...');
+            
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': mimeType
+                },
+                body: file
+            });
+
+            if (!response.ok) {
+                throw new Error(`GCS upload failed: ${response.status}`);
+            }
+
+            log('✓ File uploaded successfully!', 'ok');
+        }
+
+        async function uploadDocument() {
+            const fileInput = document.getElementById('fileInput');
+            const btn = document.getElementById('uploadBtn');
+            const logEl = document.getElementById('log');
+            
+            // Reset
+            logEl.innerHTML = '';
+            logEl.classList.remove('show');
+            
+            // Validate
+            if (!fileInput.files.length) {
+                setStatus('Please select a file first.', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const mimeType = file.type || 'application/octet-stream';
+            
+            btn.disabled = true;
+            setStatus('Uploading...', 'info');
+
+            try {
+                // Step 1: Get JWT
+                const jwt = await getJWT();
+
+                // Step 2: Get upload URL
+                const uploadData = await getUploadURL(jwt, file.name, mimeType);
+
+                // Step 3: Upload to GCS
+                await uploadToGCS(uploadData.url, file, mimeType);
+
+                setStatus(`Success! Object ID: ${uploadData.id}`, 'success');
+                
+            } catch (err) {
+                log(`✗ ${err.message}`, 'err');
+                setStatus(`Error: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

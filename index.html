@@ -173,13 +173,13 @@
             log('✓ File uploaded successfully!', 'ok');
         }
 
-        async function createObject(gcsPath, fileName, mimeType) {
+        async function createObject(jwt, gcsPath, fileName, mimeType) {
             log('→ Creating object in Vertesia...');
             
             const response = await fetch(`${API_BASE}/objects`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${API_KEY}`,
+                    'Authorization': `Bearer ${jwt}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -227,14 +227,17 @@
             setStatus('Uploading...', 'info');
 
             try {
-                // Step 1: Get upload URL (reserves GCS storage)
+                // Step 1: Get JWT token (needed for creating objects)
+                const jwt = await getJWT();
+
+                // Step 2: Get upload URL (reserves GCS storage)
                 const uploadData = await getUploadURL(file.name, mimeType);
 
-                // Step 2: Upload to GCS
+                // Step 3: Upload to GCS
                 await uploadToGCS(uploadData.url, file, mimeType);
 
-                // Step 3: Create the object in Vertesia (THIS WAS MISSING!)
-                const obj = await createObject(uploadData.id, file.name, mimeType);
+                // Step 4: Create the object in Vertesia
+                const obj = await createObject(jwt, uploadData.id, file.name, mimeType);
 
                 setStatus(`Success! Object ID: ${obj.id}`, 'success');
                 
